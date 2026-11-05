@@ -264,7 +264,8 @@ const CARDS = [
  <div class="sub" id="recst">可选：录完整答案，方便对照时长。日常练习优先逐句录音。</div>
  <audio id="player" controls style="display:none"></audio>
 </div>
-<div class="sub" style="text-align:center;margin:20px 0">所有数据仅保存在本浏览器（localStorage + IndexedDB）。清除浏览器数据会丢失。</div>
+<details class="sub" style="margin:10px 0" ontoggle="updDiag()"><summary>诊断</summary><div id="diagtxt" style="word-break:break-all;margin-top:4px"></div></details>
+<div class="sub" style="text-align:center;margin:20px 0">v5 · 2026-11-05 · 所有数据仅保存在本浏览器（localStorage + IndexedDB）。清除浏览器数据会丢失。</div>
 </div>
 <script>
 const LS="shadow_v1";
@@ -307,7 +308,7 @@ $("voiceSel").onchange=e=>{applyVoiceURI(e.target.value);fillVoiceSel()};
 function unlockSpeak(){if(speakUnlocked||!window.speechSynthesis)return;try{const u=new SpeechSynthesisUtterance(" ");u.volume=0;u.rate=1;speechSynthesis.speak(u);speechSynthesis.cancel();speakUnlocked=true}catch(e){}}
 document.addEventListener("touchstart",unlockSpeak,{once:true,passive:true});
 document.addEventListener("click",unlockSpeak,{once:true});
-function speak(texts,i=0){if(!window.speechSynthesis){$("voiceInfo").textContent="此浏览器不支持朗读";return}unlockSpeak();if(i===0){try{speechSynthesis.cancel()}catch(e){} }if(i>=texts.length){hl(-1);return}
+function speak(texts,i=0){if(!window.speechSynthesis){$("voiceInfo").textContent="此浏览器不支持朗读";return}if(i===0){if(curStream||(mr&&mr.state==="recording"))stopCurrent();if(!curStream)setAS("playback")}unlockSpeak();if(i===0){try{speechSynthesis.cancel()}catch(e){} }if(i>=texts.length){hl(-1);return}
  const u=new SpeechSynthesisUtterance(texts[i].t);u.lang=(voice&&voice.lang)||"en-GB";if(voice)u.voice=voice;u.rate=st.rate;u.pitch=1;u.volume=1;hl(texts[i].i);
  let advanced=false;const go=()=>{if(advanced)return;advanced=true;texts.length>1?speak(texts,i+1):hl(-1)};
  u.onend=go;u.onerror=e=>{console.warn("tts",e);$("voiceInfo").textContent="朗读失败："+(e.error||"未知")+" · 请关掉静音，并在 设置→辅助功能→朗读内容 确认英文语音已下载";go()};
@@ -389,15 +390,22 @@ function makeSentRow(c,s,i){const d=document.createElement("div");d.className="s
  rb.onclick=()=>toggleSentRec(i,s,rb,au,sc);
  const ab=document.createElement("button");ab.className="g sb";ab.textContent="🎙 识别打分";ab.dataset.role="asr";if(!HAS_SR)ab.style.display="none";ab.onclick=()=>asrScore(c,i,s,ab,sc);
  act.append(rb,ab,au,sc);d.append(top,act);return d}
-let curStream=null,safetyT=null,recBusy=false;
+let curStream=null,safetyT=null,recBusy=false,relT=null;
+const DIAG={as:"",mime:"",err:"",size:"",sr:""};
+function setAS(t){try{if(navigator.audioSession&&navigator.audioSession.type!==t)navigator.audioSession.type=t}catch(e){DIAG.err="audioSession:"+e.message}updDiag()}
+function asType(){try{return navigator.audioSession?navigator.audioSession.type:"不支持"}catch(e){return "?"}}
+function updDiag(){const el=document.getElementById("diagtxt");if(!el)return;el.textContent="audioSession: "+asType()+" · mimeType: "+(DIAG.mime||pickMime()||"默认")+" · 上次录音错误: "+(DIAG.err||"无")+" · 上次录音大小: "+(DIAG.size||"-")+" · 语音识别: "+((window.SpeechRecognition||window.webkitSpeechRecognition)?"可用":"不可用")}
+function forPlayback(){/* 录完后 iOS 常卡在 play-and-record → 朗读/回放无声；切回 playback 再 auto */setAS("playback");setAS("auto")}
 function pickMime(){if(!window.MediaRecorder||!MediaRecorder.isTypeSupported)return "";for(const t of["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/aac","audio/webm;codecs=opus","audio/webm","audio/ogg;codecs=opus"])try{if(MediaRecorder.isTypeSupported(t))return t}catch(e){}return ""}
 function newRec(stream){const t=pickMime();return t?new MediaRecorder(stream,{mimeType:t}):new MediaRecorder(stream)}
 function blobOf(chs,m){const t=(m.mimeType||pickMime()||"audio/mp4").split(";")[0];return new Blob(chs,{type:t})}
 function resetSentButtons(){document.querySelectorAll('.s-act button[data-role="rec"]').forEach(b=>{b.disabled=false;b.textContent=b.dataset.has?"● 重录":"● 跟读"})}
-function releaseMic(){try{curStream&&curStream.getTracks().forEach(t=>{try{t.stop()}catch(e){}})}catch(e){}curStream=null}
+function releaseMic(){clearTimeout(relT);const had=!!curStream;try{curStream&&curStream.getTracks().forEach(t=>{try{t.stop()}catch(e){}})}catch(e){}curStream=null;if(had)forPlayback()}
 function cleanupRec(){clearTimeout(safetyT);safetyT=null;stopSR();releaseMic();mr=null;activeSent=-1;recMode=null;recBusy=false;resetSentButtons()}
 function stopCurrent(){/* 同步停止当前录音（onstop 里会保存），并立刻释放麦克风与状态 */
- const m=mr;if(m&&m.state!=="inactive"){try{m.stop()}catch(e){}}clearTimeout(safetyT);stopSR();releaseMic();mr=null;activeSent=-1;recMode=null;recBusy=false;resetSentButtons()}
+ const m=mr;clearTimeout(safetyT);stopSR();
+ if(m&&m.state!=="inactive"){try{m.requestData()}catch(e){}try{m.stop()}catch(e){DIAG.err="stop:"+e.message;releaseMic()}relT=setTimeout(releaseMic,1500)}else releaseMic();
+ mr=null;activeSent=-1;recMode=null;recBusy=false;resetSentButtons()}
 function toggleSentRec(i,target,btn,au,scEl){
  if(asrBtn)asrReset();
  if(mr&&mr.state==="recording"&&activeSent===i&&recMode==="sent"){stopCurrent();return}
@@ -407,69 +415,90 @@ function toggleSentRec(i,target,btn,au,scEl){
  recBusy=true;scEl.textContent="正在打开麦克风…";scEl.className="s-score";
  const c=list[idx];const key=sentKey(c,i);
  // 直接在点击手势里调用 getUserMedia（iOS 需要）
+ setAS("auto");if(curStream)releaseMic();setAS("auto");
  navigator.mediaDevices.getUserMedia({audio:true}).then(stream=>{
-  releaseMic();curStream=stream;chunks=[];activeSent=i;recMode="sent";
+  curStream=stream;setAS("play-and-record");DIAG.err="";chunks=[];activeSent=i;recMode="sent";
   let m;try{m=newRec(stream)}catch(e){cleanupRec();scEl.textContent="录音启动失败："+e.message;scEl.className="s-score warn";return}
-  mr=m;let heard="";const asrP=new Promise(res=>{const r=startSR(t=>{if(t)heard=t;res(heard)});if(!r)res("")});
-  m.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
-  m.onerror=e=>{cleanupRec();scEl.textContent="录音出错："+((e.error&&e.error.name)||"未知")+"，请再点 ● 重试";scEl.className="s-score warn"};
-  m.onstop=async()=>{const mine=chunks;chunks=[];const sec=Math.max(1,Math.round((Date.now()-t0)/1000));
-   stopSR();releaseMic();clearTimeout(safetyT);if(mr===m)mr=null;activeSent=-1;recMode=null;recBusy=false;
-   btn.dataset.has="1";resetSentButtons();
-   const blob=blobOf(mine,m);if(!blob.size){scEl.textContent="没有录到声音，请再试一次";scEl.className="s-score warn";return}
-   idb("put",key,blob);if(sentURLs[key])URL.revokeObjectURL(sentURLs[key]);sentURLs[key]=URL.createObjectURL(blob);au.src=sentURLs[key];au.style.display="block";
+  mr=m;m._s=stream;DIAG.mime=m.mimeType||pickMime()||"默认";updDiag();let heard="";const asrP=new Promise(res=>{const r=startSR(t=>{if(t)heard=t;res(heard)});if(!r)res("")});
+  m._c=[];m.ondataavailable=e=>{if(e.data&&e.data.size)m._c.push(e.data)};
+  m.onerror=e=>{DIAG.err=((e.error&&(e.error.name+" "+e.error.message))||"未知");cleanupRec();scEl.textContent="录音出错："+DIAG.err+"，请再点 ● 重试";scEl.className="s-score warn"};
+  m.onstop=async()=>{const mine=m._c||[];const sec=Math.max(1,Math.round((Date.now()-t0)/1000));
+   const cur=(mr===m||mr===null)&&curStream===m._s;if(curStream===m._s){stopSR();releaseMic()}else if(m._s)m._s.getTracks().forEach(t=>{try{t.stop()}catch(e){}});
+   if(mr===m){mr=null;clearTimeout(safetyT);activeSent=-1;recMode=null;recBusy=false}
+   btn.dataset.has="1";if(cur||!mr)resetSentButtons();
+   const blob=blobOf(mine,m);DIAG.size=blob.size+" B ("+blob.type+", "+mine.length+" 块)";updDiag();if(!blob.size){scEl.textContent="没有录到声音（0 字节，类型 "+blob.type+"），请再试一次";scEl.className="s-score warn";return}
+   idb("put",key,blob);setAudio(au,key,blob,scEl);
    scEl.textContent="练习反馈计算中…";scEl.className="s-score mute";
    let text="";try{text=await Promise.race([asrP,new Promise(r=>setTimeout(()=>r(heard),1200))])}catch(e){text=heard}
    const r=(text&&normWords(text).length)?scoreText(target,text):scoreDuration(target,sec,blob.size);
    st.sentRec[key]={score:r.score,mode:r.mode,missed:r.missed||[],sec:r.sec||sec,exp:r.exp||0};save();setScoreEl(scEl,r)};
-  try{t0=Date.now();m.start(250)}catch(e){cleanupRec();scEl.textContent="录音启动失败："+e.message;scEl.className="s-score warn";return}
+  try{t0=Date.now();m.start()}catch(e){cleanupRec();scEl.textContent="录音启动失败："+e.message;scEl.className="s-score warn";return}
   btn.textContent="■ 停止";scEl.textContent="录音中…";scEl.className="s-score";
   document.querySelectorAll('.s-act button[data-role="rec"]').forEach(b=>{if(b!==btn)b.textContent="● 跟读（会先停上一句）"});
   safetyT=setTimeout(()=>{if(mr===m&&m.state==="recording")stopCurrent()},60000);
- }).catch(e=>{cleanupRec();scEl.textContent="无法使用麦克风："+(e.name||"")+" "+(e.message||"")+"（设置→Safari→麦克风 允许）";scEl.className="s-score warn"})}
+ }).catch(e=>{DIAG.err=(e.name||"")+" "+(e.message||"");cleanupRec();scEl.textContent="无法使用麦克风："+(e.name||"")+" "+(e.message||"")+"（设置→Safari→麦克风 允许）";scEl.className="s-score warn"})}
 const HAS_SR=!!(window.SpeechRecognition||window.webkitSpeechRecognition);
 let asrBtn=null;
-function asrReset(){stopSR();if(asrBtn){asrBtn.textContent="🎙 识别打分";asrBtn.disabled=false}asrBtn=null}
+function asrReset(){if(asrFinish){const f=asrFinish;asrFinish=null;f("switch")}stopSR();if(asrBtn){asrBtn.textContent="🎙 识别打分";asrBtn.disabled=false}asrBtn=null}
+let asrFinish=null;
 function asrScore(c,i,target,btn,scEl){
- if(asrBtn===btn){asrReset();scEl.textContent="已取消识别";scEl.className="s-score mute";return}
- if(mr&&mr.state==="recording")stopCurrent();asrReset();
+ if(asrBtn===btn&&asrFinish){asrFinish("user");return}/* 第二次点 = 完成 */
+ if(mr&&mr.state==="recording")stopCurrent();if(asrFinish)asrFinish("switch");asrReset();
  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR){scEl.textContent="此浏览器不支持语音识别";scEl.className="s-score warn";return}
- let r,done=false,tm=null;const fin=(msg,cls)=>{if(done)return;done=true;clearTimeout(tm);asrReset();if(msg){scEl.textContent=msg;scEl.className="s-score "+(cls||"warn")}};
- try{r=new SR();r.lang=(voice&&/^en-(GB|US)/i.test(voice.lang))?voice.lang:"en-GB";r.interimResults=false;r.maxAlternatives=1;r.continuous=false;
-  r.onresult=e=>{const t=(e.results[0]&&e.results[0][0]&&e.results[0][0].transcript)||"";if(!normWords(t).length){fin("没听清，请靠近手机再读一遍");return}
-   const res=scoreText(target,t);const key=sentKey(c,i);st.sentRec[key]=Object.assign({},st.sentRec[key]||{},{score:res.score,mode:"asr",missed:res.missed});save();fin("");setScoreEl(scEl,res)};
-  r.onerror=e=>{const m={"not-allowed":"未允许麦克风/语音识别：设置→Safari→麦克风，并开启 设置→Siri 听写","service-not-allowed":"系统语音识别不可用：请在 设置→通用→键盘 打开「启用听写」","no-speech":"没听到声音，点 🎙 后马上读","audio-capture":"麦克风被占用，请稍后重试","network":"识别需要联网，请检查网络","aborted":""}[e.error];fin(m===undefined?"识别出错："+e.error:m)};
-  r.onend=()=>fin(done?"":"没识别到内容，再试一次");
-  asrBtn=btn;sr=r;r.start();btn.textContent="■ 识别中…";scEl.textContent="请朗读这句（识别中）…";scEl.className="s-score";
- }catch(e){fin("识别启动失败："+e.message);return}
- tm=setTimeout(()=>{try{r.stop()}catch(e){}},15000)}
+ const key=sentKey(c,i),t1=Date.now(),exp=Math.max(1.5,normWords(target).length/2.3);
+ let r,done=false,latest="",errMsg="",hardT=null,idleT=null;
+ const finalize=why=>{if(done)return;done=true;clearTimeout(hardT);clearTimeout(idleT);asrFinish=null;
+  try{r&&r.stop()}catch(e){}try{r&&r.abort()}catch(e){}if(r){r.onresult=r.onerror=r.onend=null}sr=null;
+  if(asrBtn){asrBtn.textContent="🎙 识别打分";asrBtn.disabled=false}asrBtn=null;forPlayback();
+  if(latest&&normWords(latest).length){const res=scoreText(target,latest);st.sentRec[key]=Object.assign({},st.sentRec[key]||{},{score:res.score,mode:"asr",missed:res.missed});save();setScoreEl(scEl,res);return}
+  const sec=Math.max(1,Math.round((Date.now()-t1)/1000));
+  if(errMsg&&why==="error"){scEl.textContent=errMsg;scEl.className="s-score warn";return}
+  const d=scoreDuration(target,sec,why==="user"?99999:0);scEl.textContent="识别未返回结果 · "+tipFrom(d);scEl.className="s-score mute"};
+ asrFinish=finalize;
+ try{r=new SR();r.lang=(voice&&/^en-(GB|US)/i.test(voice.lang))?voice.lang:"en-GB";r.interimResults=true;r.maxAlternatives=1;r.continuous=false;
+  r.onresult=e=>{let t="";for(let k=0;k<e.results.length;k++){const a=e.results[k][0];if(a&&a.transcript)t+=(t?" ":"")+a.transcript}if(t)latest=t;
+   scEl.textContent="识别中… "+latest.slice(-60);clearTimeout(idleT);idleT=setTimeout(()=>finalize("idle"),1500);
+   if(e.results.length&&e.results[e.results.length-1].isFinal)finalize("final")};
+  r.onerror=e=>{const m={"not-allowed":"未允许麦克风/语音识别：设置→Safari→麦克风，并开启 设置→Siri 听写","service-not-allowed":"系统语音识别不可用：请在 设置→通用→键盘 打开「启用听写」","no-speech":"没听到声音，点 🎙 后马上读","audio-capture":"麦克风被占用，请稍后重试","network":"识别需要联网，请检查网络","aborted":""}[e.error];
+   errMsg=m===undefined?"识别出错："+e.error:m;finalize(errMsg?"error":"end")};
+  r.onend=()=>finalize("end");
+  asrBtn=btn;sr=r;setAS("auto");r.start();btn.textContent="■ 完成";scEl.textContent="识别中… 读完点「■ 完成」";scEl.className="s-score";
+ }catch(e){errMsg="识别启动失败："+e.message;finalize("error");return}
+ hardT=setTimeout(()=>finalize("timeout"),Math.min(15000,Math.round(exp*1000)+4000))}
+function setAudio(au,key,blob,scEl){if(sentURLs[key])URL.revokeObjectURL(sentURLs[key]);au.removeAttribute("src");try{au.load()}catch(e){}
+ sentURLs[key]=URL.createObjectURL(blob);au.preload="metadata";au.src=sentURLs[key];try{au.load()}catch(e){}au.style.display="block";
+ au.onerror=()=>{const er=au.error;const msg="回放失败：code "+(er?er.code:"?")+(er&&er.message?" "+er.message:"")+" · "+blob.type+" "+blob.size+"B";DIAG.err=msg;updDiag();if(scEl){scEl.textContent=msg;scEl.className="s-score warn"}};
+ au.onplay=()=>{if(!curStream)setAS("playback")}}
 function loadSentRecs(){const c=list[idx];const arr=sents(c);arr.forEach((s,i)=>{
   const key=sentKey(c,i);const row=$("sents").children[i];if(!row)return;
   const au=row.querySelector('audio[data-role="audio"]');const sc=row.querySelector('[data-role="score"]');const btn=row.querySelector('button[data-role="rec"]');
   idb("get",key).then(b=>{if(b&&!b.type)b=new Blob([b],{type:"audio/mp4"});if(!b){if(sc){sc.textContent="录完显示练习反馈";sc.className="s-score mute"}if(au){au.removeAttribute("src");au.style.display="none"}if(btn){delete btn.dataset.has;btn.textContent="● 跟读"}return}
-   if(sentURLs[key])URL.revokeObjectURL(sentURLs[key]);sentURLs[key]=URL.createObjectURL(b);au.src=sentURLs[key];au.style.display="block";if(btn){btn.dataset.has="1";btn.textContent="● 重录"}
+   setAudio(au,key,b,sc);if(btn){btn.dataset.has="1";btn.textContent="● 重录"}
    const meta=st.sentRec[key];if(meta){setScoreEl(sc,{score:meta.score,mode:meta.mode,missed:meta.missed||[],sec:meta.sec||meta.dur||0,exp:meta.exp||Math.round(Math.max(1.5,normWords(arr[i]).length/2.3))})}
    else{sc.textContent="已有录音 · 点重录可重新评分";sc.className="s-score mute"}});
  })}
-function showRec(b){curBlob=b;if(curURL)URL.revokeObjectURL(curURL);curURL=b?URL.createObjectURL(b):null;$("player").style.display=b?"block":"none";if(b)$("player").src=curURL;else $("player").removeAttribute("src");$("dl").disabled=$("del").disabled=!b;}
+function showRec(b){curBlob=b;if(curURL)URL.revokeObjectURL(curURL);curURL=b?URL.createObjectURL(b):null;$("player").style.display=b?"block":"none";if(b){$("player").src=curURL;try{$("player").load()}catch(e){}$("player").onplay=()=>{if(!curStream)setAS("playback")}}else $("player").removeAttribute("src");$("dl").disabled=$("del").disabled=!b;}
 function loadRec(){const c=list[idx];idb("get",recKey(c)).then(b=>{showRec(b||null);if(b&&durText(c))$("recst").textContent=durText(c);else if(!b)$("recst").textContent="可选：录完整答案对照时长。日常请用每句旁的 ● 跟读。"})}
 $("rec").onclick=()=>{
  if(asrBtn)asrReset();
  if(mr&&mr.state==="recording"&&recMode==="full"){stopCurrent();return}
  if(mr&&mr.state==="recording")stopCurrent();
  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia||!window.MediaRecorder){$("recst").textContent="此浏览器不支持录音（需 https 或本地文件打开，并使用较新的 Chrome/Safari）。";return}
- navigator.mediaDevices.getUserMedia({audio:true}).then(s=>{releaseMic();curStream=s;chunks=[];recMode="full";let m;
-  try{m=newRec(s)}catch(e){cleanupRec();$("recst").textContent="录音启动失败："+e.message;return}mr=m;
-  m.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
+ setAS("auto");if(curStream)releaseMic();setAS("auto");
+ navigator.mediaDevices.getUserMedia({audio:true}).then(s=>{curStream=s;setAS("play-and-record");DIAG.err="";chunks=[];recMode="full";let m;
+  try{m=newRec(s)}catch(e){cleanupRec();$("recst").textContent="录音启动失败："+e.message;return}mr=m;m._s=s;
+  m._c=[];m.ondataavailable=e=>{if(e.data&&e.data.size)m._c.push(e.data)};
   m.onerror=()=>{cleanupRec();$("rec").textContent="● 整段录音";$("recst").textContent="录音出错，请重试"};
-  m.onstop=()=>{const mine=chunks;chunks=[];releaseMic();if(mr===m)mr=null;recMode=null;recBusy=false;resetSentButtons();
-   const b=blobOf(mine,m);const c=list[idx];st.dur[recKey(c)]=Math.round((Date.now()-t0)/1000);save();idb("put",recKey(c),b);showRec(b);$("rec").textContent="● 重新整段";$("recst").textContent="已保存。"+durText(c)+"。"};
-  try{t0=Date.now();m.start(250)}catch(e){cleanupRec();$("recst").textContent="录音启动失败："+e.message;return}
+  m.onstop=()=>{const mine=m._c||[];if(curStream===m._s)releaseMic();else if(m._s)m._s.getTracks().forEach(t=>{try{t.stop()}catch(e){}});if(mr===m){mr=null;recMode=null;recBusy=false}if(!mr)resetSentButtons();
+   const b=blobOf(mine,m);DIAG.size=b.size+" B ("+b.type+")";updDiag();if(!b.size){$("recst").textContent="没有录到声音（0 字节），请重试";return}const c=list[idx];st.dur[recKey(c)]=Math.round((Date.now()-t0)/1000);save();idb("put",recKey(c),b);showRec(b);$("rec").textContent="● 重新整段";$("recst").textContent="已保存。"+durText(c)+"。"};
+  try{t0=Date.now();m.start()}catch(e){cleanupRec();$("recst").textContent="录音启动失败："+e.message;return}
   $("rec").textContent="■ 停止整段";$("recst").textContent="整段录音中……";
- }).catch(e=>{cleanupRec();$("recst").textContent="无法使用麦克风："+(e.name||"")+" "+(e.message||"")+"（请在浏览器设置里允许麦克风）"})};
+ }).catch(e=>{DIAG.err=(e.name||"")+" "+(e.message||"");cleanupRec();$("recst").textContent="无法使用麦克风："+(e.name||"")+" "+(e.message||"")+"（请在浏览器设置里允许麦克风）"})};
 $("dl").onclick=()=>{if(!curBlob)return;const a=document.createElement("a");const ext=/mp4|aac/.test(curBlob.type)?"m4a":/ogg/.test(curBlob.type)?"ogg":"webm";a.href=curURL;a.download=today+"_"+recKey(list[idx]).replace("#","_")+"."+ext;document.body.append(a);a.click();a.remove()};
 $("del").onclick=()=>{if(confirm("删除这张卡的整段录音？")){idb("del",recKey(list[idx]));delete st.dur[recKey(list[idx])];save();showRec(null)}};
 
+document.addEventListener("visibilitychange",()=>{if(document.hidden&&(mr||curStream))stopCurrent()});
+window.addEventListener("pagehide",()=>{try{stopCurrent()}catch(e){}});
 // Check-in
 function streak(){let n=0,d=new Date();if(!st.done[ymd(d)])d.setDate(d.getDate()-1);while(st.done[ymd(d)]){n++;d.setDate(d.getDate()-1)}return n}
 function renderCal(){$("streak").textContent=streak();$("total").textContent=Object.keys(st.done).length;
