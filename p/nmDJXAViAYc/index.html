@@ -276,12 +276,20 @@ let db;const dbp=new Promise(r=>{try{const q=indexedDB.open("shadowRec",1);q.onu
 const idb=(m,k,v)=>dbp.then(()=>new Promise(r=>{if(!db)return r(null);const t=db.transaction("rec",m==="get"?"readonly":"readwrite").objectStore("rec");const q=m==="get"?t.get(k):m==="put"?t.put(v,k):t.delete(k);q.onsuccess=()=>r(q.result);q.onerror=()=>r(null)}));
 
 // TTS
-let voice=null;
-function pickVoice(){if(!window.speechSynthesis)return;const vs=speechSynthesis.getVoices();voice=vs.find(v=>v.lang==="en-GB")||vs.find(v=>/en[-_]GB/i.test(v.lang))||vs.find(v=>/^en/i.test(v.lang))||null;$("voiceInfo").textContent=voice?"朗读声音："+voice.name+" ("+voice.lang+")":(window.speechSynthesis?"未找到英文语音，将用系统默认":"此浏览器不支持朗读");}
-if(window.speechSynthesis){pickVoice();speechSynthesis.onvoiceschanged=pickVoice}else pickVoice();
-function speak(texts,i=0){if(!window.speechSynthesis)return;if(i===0)speechSynthesis.cancel();if(i>=texts.length){hl(-1);return}
- const u=new SpeechSynthesisUtterance(texts[i].t);u.lang="en-GB";if(voice)u.voice=voice;u.rate=st.rate;hl(texts[i].i);
- u.onend=()=>texts.length>1?speak(texts,i+1):hl(-1);speechSynthesis.speak(u);}
+let voice=null,speakUnlocked=false;
+function pickVoice(){if(!window.speechSynthesis)return;const vs=speechSynthesis.getVoices();voice=vs.find(v=>v.lang==="en-GB")||vs.find(v=>/en[-_]GB/i.test(v.lang))||vs.find(v=>/^en/i.test(v.lang))||vs.find(v=>/en/i.test(v.lang))||null;$("voiceInfo").textContent=voice?"朗读声音："+voice.name+" ("+voice.lang+")":(window.speechSynthesis?"未找到英文语音，将用系统默认":"此浏览器不支持朗读");}
+if(window.speechSynthesis){pickVoice();speechSynthesis.onvoiceschanged=pickVoice;setTimeout(pickVoice,250);setTimeout(pickVoice,1000)}else pickVoice();
+function unlockSpeak(){if(speakUnlocked||!window.speechSynthesis)return;try{const u=new SpeechSynthesisUtterance(" ");u.volume=0;u.rate=1;speechSynthesis.speak(u);speechSynthesis.cancel();speakUnlocked=true}catch(e){}}
+document.addEventListener("touchstart",unlockSpeak,{once:true,passive:true});
+document.addEventListener("click",unlockSpeak,{once:true});
+function speak(texts,i=0){if(!window.speechSynthesis){$("voiceInfo").textContent="此浏览器不支持朗读";return}unlockSpeak();if(i===0){try{speechSynthesis.cancel()}catch(e){} }if(i>=texts.length){hl(-1);return}
+ const u=new SpeechSynthesisUtterance(texts[i].t);u.lang=(voice&&voice.lang)||"en-GB";if(voice)u.voice=voice;u.rate=st.rate;u.volume=1;hl(texts[i].i);
+ let advanced=false;const go=()=>{if(advanced)return;advanced=true;texts.length>1?speak(texts,i+1):hl(-1)};
+ u.onend=go;u.onerror=e=>{console.warn("tts",e);$("voiceInfo").textContent="朗读失败："+(e.error||"未知")+" · 请关掉静音，并在 设置→辅助功能→朗读内容 确认英文语音已下载";go()};
+ try{speechSynthesis.speak(u);if(speechSynthesis.paused)speechSynthesis.resume();
+  // iOS sometimes stalls the queue after cancel; nudge once
+  setTimeout(()=>{try{if(speechSynthesis.speaking===false&&speechSynthesis.pending===false&&i===0){/* already ended */}else if(speechSynthesis.paused)speechSynthesis.resume()}catch(e){}},300);
+ }catch(e){$("voiceInfo").textContent="朗读失败："+e.message;hl(-1)}}
 function hl(n){document.querySelectorAll(".s").forEach((e,j)=>e.classList.toggle("on",j===n))}
 
 st.ver=st.ver||{};st.dur=st.dur||{};
