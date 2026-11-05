@@ -38,7 +38,7 @@ select{padding:7px;border-radius:8px;border:1px solid #ddd;background:#fff;font-
 .timing{font-size:12px;color:#2f6b45;background:#f0f6f1;border-radius:6px;padding:4px 8px;margin:6px 0;display:inline-block}.timing.warn{color:#a04000;background:#fff1e6}.timing.info{color:#666;background:#f3f3f3}
 .ex{color:#c0392b;font-size:12px}
 </style></head><body><div class="wrap">
-<script>
+<script>const IS_IOS=/iP(hone|ad|od)/.test(navigator.userAgent)||(navigator.platform==="MacIntel"&&navigator.maxTouchPoints>1);
 /* ============================================================
  * 卡片数据：全部来自 cen chen 金山文档导出（/workspace/shared/speaking-cards/），英文为原文逐字，
  *   仅去掉了夹在句中的中文注释，并按跟读节奏拆句。
@@ -88,7 +88,7 @@ const CARDS = [{"id":"mi-wurnq5","src":"口语课笔记","srcDoc":"口语课笔�
  <audio id="player" controls style="display:none"></audio>
 </div>
 <details class="sub" style="margin:10px 0" ontoggle="updDiag()"><summary>诊断</summary><div id="diagtxt" style="word-break:break-all;margin-top:4px"></div></details>
-<div class="sub" style="text-align:center;margin:20px 0">v7 · 2026-11-05 · 所有数据仅保存在本浏览器（localStorage + IndexedDB）。清除浏览器数据会丢失。</div>
+<div class="sub" style="text-align:center;margin:20px 0">v8 · 2026-11-05 · 所有数据仅保存在本浏览器（localStorage + IndexedDB）。清除浏览器数据会丢失。</div>
 </div>
 <script>
 const LS="shadow_v1";
@@ -131,13 +131,30 @@ $("voiceSel").onchange=e=>{applyVoiceURI(e.target.value);fillVoiceSel()};
 function unlockSpeak(){if(speakUnlocked||!window.speechSynthesis)return;try{const u=new SpeechSynthesisUtterance(" ");u.volume=0;u.rate=1;speechSynthesis.speak(u);speechSynthesis.cancel();speakUnlocked=true}catch(e){}}
 document.addEventListener("touchstart",unlockSpeak,{once:true,passive:true});
 document.addEventListener("click",unlockSpeak,{once:true});
-function speak(texts,i=0){if(!window.speechSynthesis){$("voiceInfo").textContent="此浏览器不支持朗读";return}if(i===0){if(curStream||(mr&&mr.state==="recording"))stopCurrent();if(!curStream)setAS("playback")}unlockSpeak();if(i===0){try{speechSynthesis.cancel()}catch(e){} }if(i>=texts.length){hl(-1);return}
- const u=new SpeechSynthesisUtterance(texts[i].t);u.lang=(voice&&voice.lang)||"en-GB";if(voice)u.voice=voice;u.rate=st.rate;u.pitch=1;u.volume=1;hl(texts[i].i);
- let advanced=false;const go=()=>{if(advanced)return;advanced=true;texts.length>1?speak(texts,i+1):hl(-1)};
- u.onend=go;u.onerror=e=>{console.warn("tts",e);if(e.error==="canceled"||e.error==="interrupted"){hl(-1);return}$("voiceInfo").textContent="朗读失败："+(e.error||"未知")+" · 请关掉静音，并在 设置→辅助功能→朗读内容 确认英文语音已下载";go()};
- try{speechSynthesis.speak(u);if(speechSynthesis.paused)speechSynthesis.resume();
-  setTimeout(()=>{try{if(speechSynthesis.speaking===false&&speechSynthesis.pending===false&&i===0){}else if(speechSynthesis.paused)speechSynthesis.resume()}catch(e){}},300);
- }catch(e){$("voiceInfo").textContent="朗读失败："+e.message;hl(-1)}}
+let ttsRefs=[],ttsGen=0;
+function ttsDiag(ev){DIAG.tts=ev;updDiag()}
+function speak(texts,i=0,retry=false){if(!window.speechSynthesis){$("voiceInfo").textContent="此浏览器不支持朗读";return}
+ if(i>=texts.length){hl(-1);return}
+ if(i===0&&!retry){if(curStream||(mr&&mr.state==="recording"))stopCurrent();ttsGen++;unlockSpeak();const busy=speechSynthesis.speaking||speechSynthesis.pending;if(busy){try{speechSynthesis.cancel()}catch(e){}}if(!curStream)setAS("playback");
+  const g=ttsGen;if(!busy){speakOne(texts,0,false,g);return}/* 正在读时先 cancel，延时 80ms 再读；空闲时在点击手势内同步读（iOS 手势要求） */
+  setTimeout(()=>{if(g===ttsGen)speakOne(texts,0,false,g)},80);return}
+ speakOne(texts,i,retry,ttsGen)}
+function speakOne(texts,i,useDefault,g){if(i>=texts.length){hl(-1);return}
+ if(!curStream)setAS("playback");
+ const u=new SpeechSynthesisUtterance(texts[i].t);let v=useDefault?null:voice;
+ try{if(v&&!speechSynthesis.getVoices().some(x=>x.voiceURI===v.voiceURI))v=null}catch(e){v=null}
+ u.lang=(v&&v.lang)||(voice&&voice.lang)||"en-GB";if(v)u.voice=v;u.rate=st.rate;u.pitch=1;u.volume=1;hl(texts[i].i);
+ ttsRefs.push(u);if(ttsRefs.length>8)ttsRefs.shift();
+ DIAG.voice=v?v.name:"系统默认";DIAG.ttsAS=asType();
+ let started=false,advanced=false;
+ const go=()=>{if(advanced)return;advanced=true;clearTimeout(wd);if(g!==ttsGen)return;i+1<texts.length?speakOne(texts,i+1,useDefault,g):hl(-1)};
+ u.onstart=()=>{started=true;clearTimeout(wd);ttsDiag("start")};
+ u.onend=()=>{ttsDiag("end");go()};
+ u.onerror=e=>{const n=e.error||"未知";ttsDiag("error:"+n);clearTimeout(wd);if(n==="canceled"||n==="interrupted"){advanced=true;if(g===ttsGen)hl(-1);return}$("voiceInfo").textContent="朗读失败："+n+" · 朗读没声音？试试刷新页面 / 关掉静音拨片 / 调大媒体音量";go()};
+ const wd=setTimeout(()=>{if(started||advanced||g!==ttsGen)return;advanced=true;try{speechSynthesis.cancel()}catch(e){}
+  if(!useDefault){ttsDiag("无 onstart→默认语音重试");setTimeout(()=>{if(g===ttsGen)speakOne(texts,i,true,g)},100)}
+  else{ttsDiag("无 onstart（重试后）");hl(-1);$("voiceInfo").textContent="朗读没声音？试试刷新页面 / 关掉静音拨片 / 调大媒体音量"}},2000);
+ try{speechSynthesis.speak(u);if(speechSynthesis.paused)speechSynthesis.resume()}catch(e){clearTimeout(wd);ttsDiag("error:"+e.message);$("voiceInfo").textContent="朗读失败："+e.message;hl(-1)}}
 function hl(n){document.querySelectorAll(".s").forEach((e,j)=>e.classList.toggle("on",j===n))}
 
 st.ver=st.ver||{};st.dur=st.dur||{};
@@ -180,7 +197,7 @@ $("rate").value=st.rate;$("rateV").textContent=st.rate+"x";
 $("rate").oninput=e=>{st.rate=+e.target.value;$("rateV").textContent=st.rate.toFixed(2)+"x";save()};
 $("ver").onchange=e=>{st.ver[list[idx].id]=e.target.value;save();render()};
 $("playAll").onclick=()=>speak(sents(list[idx]).map((t,i)=>({t,i})));
-$("stop").onclick=()=>{window.speechSynthesis&&speechSynthesis.cancel();hl(-1)};
+$("stop").onclick=()=>{ttsGen++;window.speechSynthesis&&speechSynthesis.cancel();hl(-1)};
 
 // Recording (per-sentence primary + optional full-card)
 let t0=0,mr=null,chunks=[],curURL=null,curBlob=null,activeSent=-1,sentURLs={},recMode=null,sr=null;
@@ -215,20 +232,21 @@ function makeSentRow(c,s,i){const d=document.createElement("div");d.className="s
  act.append(rb,ab,au,sc);d.append(top,act);return d}
 let curStream=null,safetyT=null,recBusy=false,relT=null;
 const DIAG={as:"",mime:"",err:"",size:"",sr:"",trk:""};
-function setAS(t){/* v7：不再改 audioSession（会让 iOS 采集轨道静音→0 字节） */}
+function setAS(t){/* v8：从不设 play-and-record；麦克风流活动时绝不改动 */if(t==="play-and-record"||curStream)return;try{if(navigator.audioSession&&navigator.audioSession.type!==t)navigator.audioSession.type=t}catch(e){DIAG.err="audioSession:"+e.message}updDiag()}
 function asType(){try{return navigator.audioSession?navigator.audioSession.type:"不支持"}catch(e){return "?"}}
-function updDiag(){const el=document.getElementById("diagtxt");if(!el)return;el.textContent="audioSession: "+asType()+" · mimeType: "+(DIAG.mime||pickMime()||"默认")+" · 上次录音错误: "+(DIAG.err||"无")+" · 上次录音大小: "+(DIAG.size||"-")+" · 麦克风轨道: "+(DIAG.trk||"-")+" · 语音识别: "+((window.SpeechRecognition||window.webkitSpeechRecognition)?"可用":"不可用")}
+function updDiag(){const el=document.getElementById("diagtxt");if(!el)return;el.textContent="audioSession: "+asType()+" · mimeType: "+(DIAG.mime||pickMime()||"默认")+" · 上次录音错误: "+(DIAG.err||"无")+" · 上次录音大小: "+(DIAG.size||"-")+" · 麦克风轨道: "+(DIAG.trk||"-")+" · 朗读事件: "+(DIAG.tts||"-")+" · 朗读语音: "+(DIAG.voice||"-")+" · 朗读时 audioSession: "+(DIAG.ttsAS||"-")+" · 语音识别: "+((window.SpeechRecognition||window.webkitSpeechRecognition)?"可用":"不可用")}
 function trkDiag(s){try{const t=s.getAudioTracks()[0];DIAG.trk=t?(t.readyState+(t.muted?" · muted⚠":"")+(t.enabled?"":" · disabled")):"无轨道";if(t){t.onmute=()=>{DIAG.trk="live · muted⚠(录音中)";updDiag()};t.onunmute=()=>{DIAG.trk=t.readyState;updDiag()}}}catch(e){DIAG.trk="?"}updDiag()}
-function forPlayback(){/* 录完后 iOS 常卡在 play-and-record → 朗读/回放无声；切回 playback 再 auto */setAS("playback");setAS("auto")}
+function forPlayback(){/* 录完后 iOS 常卡在 play-and-record → 朗读/回放无声；切回 playback 再 auto */setTimeout(()=>{if(!curStream&&!(mr&&mr.state==="recording"))setAS("playback")},300)}
 function pickMime(){if(!window.MediaRecorder||!MediaRecorder.isTypeSupported)return "";for(const t of["audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/aac","audio/webm;codecs=opus","audio/webm","audio/ogg;codecs=opus"])try{if(MediaRecorder.isTypeSupported(t))return t}catch(e){}return ""}
 function newRec(stream){const t=pickMime();return t?new MediaRecorder(stream,{mimeType:t}):new MediaRecorder(stream)}
 function blobOf(chs,m){const t=(m.mimeType||pickMime()||"audio/mp4").split(";")[0];return new Blob(chs,{type:t})}
 function resetSentButtons(){document.querySelectorAll('.s-act button[data-role="rec"]').forEach(b=>{b.disabled=false;b.textContent=b.dataset.has?"● 重录":"● 跟读"})}
-function releaseMic(){clearTimeout(relT);const had=!!curStream;try{curStream&&curStream.getTracks().forEach(t=>{try{t.stop()}catch(e){}})}catch(e){}curStream=null;if(had)forPlayback()}
+function releaseMic(){clearTimeout(relT);const had=!!curStream;try{curStream&&curStream.getTracks().forEach(t=>{try{t.stop()}catch(e){}})}catch(e){}curStream=null;if(had){DIAG.trk="已释放";updDiag();forPlayback()}}
+function quietAll(){/* 开麦前停掉朗读与回放，避免 iOS 音频会话冲突 */ttsGen++;try{window.speechSynthesis&&speechSynthesis.cancel()}catch(e){}hl(-1);document.querySelectorAll("audio").forEach(a=>{try{a.pause()}catch(e){}})}
 function cleanupRec(){clearTimeout(safetyT);safetyT=null;stopSR();releaseMic();mr=null;activeSent=-1;recMode=null;recBusy=false;resetSentButtons()}
 function stopCurrent(){/* 同步停止当前录音（onstop 里会保存），并立刻释放麦克风与状态 */
  const m=mr;clearTimeout(safetyT);stopSR();
- if(m&&m.state!=="inactive"){try{m.stop()}catch(e){DIAG.err="stop:"+e.message;releaseMic()}relT=setTimeout(releaseMic,4000)}else releaseMic();
+ if(m&&m.state!=="inactive"){try{m.stop()}catch(e){DIAG.err="stop:"+e.message;releaseMic()}relT=setTimeout(()=>{if(curStream===m._s)releaseMic()},4000)}else releaseMic();
  mr=null;activeSent=-1;recMode=null;recBusy=false;resetSentButtons()}
 function toggleSentRec(i,target,btn,au,scEl){
  if(asrBtn)asrReset();
@@ -239,7 +257,7 @@ function toggleSentRec(i,target,btn,au,scEl){
  recBusy=true;scEl.textContent="正在打开麦克风…";scEl.className="s-score";
  const c=list[idx];const key=sentKey(c,i);
  // 直接在点击手势里调用 getUserMedia（iOS 需要）
- setAS("auto");if(curStream)releaseMic();setAS("auto");
+ quietAll();if(curStream)releaseMic();setAS("auto");
  navigator.mediaDevices.getUserMedia({audio:true}).then(stream=>{
   curStream=stream;setAS("play-and-record");DIAG.err="";chunks=[];activeSent=i;recMode="sent";
   let m;try{m=newRec(stream)}catch(e){cleanupRec();scEl.textContent="录音启动失败："+e.message;scEl.className="s-score warn";return}
@@ -286,7 +304,7 @@ function asrScore(c,i,target,btn,scEl){
   r.onerror=e=>{const m={"not-allowed":"未允许麦克风/语音识别：设置→Safari→麦克风，并开启 设置→Siri 听写","service-not-allowed":"系统语音识别不可用：请在 设置→通用→键盘 打开「启用听写」","no-speech":"没听到声音，点 🎙 后马上读","audio-capture":"麦克风被占用，请稍后重试","network":"识别需要联网，请检查网络","aborted":""}[e.error];
    errMsg=m===undefined?"识别出错："+e.error:m;finalize(errMsg?"error":"end")};
   r.onend=()=>finalize("end");
-  asrBtn=btn;sr=r;setAS("auto");r.start();btn.textContent="■ 完成";scEl.textContent="识别中… 读完点「■ 完成」";scEl.className="s-score";
+  asrBtn=btn;sr=r;quietAll();setAS("auto");r.start();btn.textContent="■ 完成";scEl.textContent="识别中… 读完点「■ 完成」";scEl.className="s-score";
  }catch(e){errMsg="识别启动失败："+e.message;finalize("error");return}
  hardT=setTimeout(()=>finalize("timeout"),Math.min(15000,Math.round(exp*1000)+4000))}
 function setAudio(au,key,blob,scEl){if(sentURLs[key])URL.revokeObjectURL(sentURLs[key]);au.removeAttribute("src");try{au.load()}catch(e){}
@@ -308,7 +326,7 @@ $("rec").onclick=()=>{
  if(mr&&mr.state==="recording"&&recMode==="full"){stopCurrent();return}
  if(mr&&mr.state==="recording")stopCurrent();
  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia||!window.MediaRecorder){$("recst").textContent="此浏览器不支持录音（需 https 或本地文件打开，并使用较新的 Chrome/Safari）。";return}
- setAS("auto");if(curStream)releaseMic();setAS("auto");
+ quietAll();if(curStream)releaseMic();setAS("auto");
  navigator.mediaDevices.getUserMedia({audio:true}).then(s=>{curStream=s;setAS("play-and-record");DIAG.err="";chunks=[];recMode="full";let m;
   try{m=newRec(s)}catch(e){cleanupRec();$("recst").textContent="录音启动失败："+e.message;return}mr=m;m._s=s;
   m._c=[];m.ondataavailable=e=>{if(e.data&&e.data.size)m._c.push(e.data)};trkDiag(s);
